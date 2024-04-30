@@ -14,6 +14,9 @@ using if_writer_t = std::enable_if_t<std::is_invocable_v<Fn, const char*, size_t
 template<typename Fn>
 using if_alloc_t = std::enable_if_t<std::is_invocable_r_v<void*, Fn, size_t>, int>;
 
+template<typename Fn>
+using if_reader_t = std::enable_if_t<std::is_invocable_r_v<std::string_view, Fn>, int>;
+
 enum Flags {
     Default = 0,
     NativeEndian = 1,
@@ -24,8 +27,9 @@ using CannotFail = std::false_type;
 template<int flags = Default, typename Writer, if_writer_t<Writer> = 1>
 auto Dump(JsonView j, Writer&& out, unsigned depthLimit = 30);
 
-template<int flags = Default, typename Alloc, if_alloc_t<Alloc> = 1>
-JsonView Parse(std::string_view buffer, Alloc&& out, unsigned depthLimit = 30);
+template<int flags = Default, typename Reader, typename Alloc, if_reader_t<Reader> = 1, if_alloc_t<Alloc> = 1>
+JsonView Parse(Reader&& reader, Alloc&& out, unsigned depthLimit = 30);
+
 namespace detail {
 
 template<int flags, int flags, typename T>
