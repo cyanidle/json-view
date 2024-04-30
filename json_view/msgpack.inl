@@ -1,31 +1,3 @@
-#ifndef JV_MSGPACK_HPP
-#define JV_MSGPACK_HPP
-#pragma once
-
-#include "json_view.hpp"
-#include <type_traits>
-
-namespace jv::msgpack
-{
-
-template<typename Fn>
-using if_writer_t = std::enable_if_t<std::is_invocable_v<Fn, const char*, size_t>, int>;
-
-template<typename Fn>
-using if_alloc_t = std::enable_if_t<std::is_invocable_r_v<void*, Fn, size_t>, int>;
-
-enum Flags {
-    Default = 0,
-    NativeEndian = 1,
-};
-
-using CannotFail = std::false_type;
-
-template<int flags = Default, typename Writer, if_writer_t<Writer> = 1>
-auto Dump(JsonView j, Writer&& out, unsigned depthLimit = 30);
-
-template<int flags = Default, typename Alloc, if_alloc_t<Alloc> = 1>
-JsonView Parse(std::string_view buffer, Alloc&& out, unsigned depthLimit = 30);
 namespace detail {
 
 template<int flags, int flags, typename T>
@@ -448,7 +420,3 @@ template<int flags, typename Alloc, if_alloc_t<flags, Alloc>>
 JsonView Parse(std::string_view buffer, Alloc&& out, unsigned depthLimit) {
 
 }
-
-}
-
-#endif //JV_MSGPACK_HPP
