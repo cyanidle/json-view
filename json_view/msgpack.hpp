@@ -15,7 +15,7 @@ template<typename Fn>
 using if_alloc_t = std::enable_if_t<std::is_invocable_r_v<void*, Fn, size_t>, int>;
 
 template<typename Fn>
-using if_reader_t = std::enable_if_t<std::is_invocable_r_v<std::string_view, Fn>, int>;
+using if_reader_t = std::enable_if_t<std::is_invocable_r_v<std::string_view, Fn, char>, int>;
 
 enum Flags {
     Default = 0,
@@ -277,11 +277,7 @@ OneParseResult parseOne(string_view data, Alloc& ctx, unsigned depthLimit) noexc
     case 111: case 112: case 113: case 114: case 115: case 116: case 117: case 118: case 119: case 120:
     case 121: case 122: case 123: case 124: case 125: case 126:
     case 127: { //pos fixint
-        return {{
-                .Type = JsonView::t_int, 
-                .Size = 0,
-                .Integer = head
-                }, 1};
+        return {head, 1};
     }
     case 0x80: case 0x81: case 0x82: case 0x83: case 0x84: case 0x85: case 0x86: case 0x87: case 0x88:
     case 0x89: case 0x8a: case 0x8b: case 0x8c: case 0x8d: case 0x8e:

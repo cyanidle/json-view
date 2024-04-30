@@ -1,0 +1,1 @@
+add_executable(json_view_test test.cpp)
