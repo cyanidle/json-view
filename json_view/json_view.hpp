@@ -44,7 +44,7 @@ struct JsonView
         };
     };
     constexpr JsonView(Data d) noexcept : data(d) {}
-    explicit constexpr JsonView(std::nullptr_t) noexcept : data {
+    explicit constexpr JsonView(std::nullptr_t = {}) noexcept : data {
             .type = t_null,
         } {}
     explicit constexpr JsonView(bool b) noexcept : data {
@@ -101,9 +101,9 @@ struct JsonView
         };
     }
     Data const& GetData() const noexcept {return data;}
-    AsObject Items() const noexcept;
-    AsArray Values() const noexcept;
-    Types type() const noexcept {return data.type;}
+    AsObject Object() const noexcept;
+    AsArray Array() const noexcept;
+    constexpr Types type() const noexcept {return data.type;}
     std::string_view Str() const noexcept {
         assert(data.type == t_string);
         return {data.string, data.size};
@@ -145,11 +145,11 @@ protected:
     JsonView target;
 };
 
-AsArray JsonView::Values() const noexcept {
+AsArray JsonView::Array() const noexcept {
     return {*this};
 }
 
-AsObject JsonView::Items() const noexcept {
+AsObject JsonView::Object() const noexcept {
     return {*this};
 }
 

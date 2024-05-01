@@ -10,13 +10,10 @@ namespace jv::msgpack
 {
 
 template<typename Fn>
-using if_writer_t = std::enable_if_t<std::is_invocable_v<Fn, const char*, size_t>, int>;
+using if_writer_t = std::enable_if_t<std::is_invocable_v<Fn, std::string_view>, int>;
 
 template<typename Fn>
 using if_alloc_t = std::enable_if_t<std::is_invocable_r_v<void*, Fn, size_t>, int>;
-
-template<typename Fn>
-using if_reader_t = std::enable_if_t<std::is_invocable_r_v<std::string_view, Fn, char>, int>;
 
 enum Flags {
     Default = 0,
@@ -26,10 +23,10 @@ enum Flags {
 using CannotFail = std::false_type;
 
 template<int flags = Default, typename Writer, if_writer_t<Writer> = 1>
-auto Dump(JsonView j, Writer&& out, unsigned depthLimit = 30);
+auto Dump(JsonView j, Writer&& out, unsigned depthLimit = 30) noexcept;
 
-template<int flags = Default, typename Reader, typename Alloc, if_reader_t<Reader> = 1, if_alloc_t<Alloc> = 1>
-JsonView Parse(Reader&& reader, Alloc&& out, unsigned depthLimit = 30);
+template<int flags = Default, typename Alloc, if_alloc_t<Alloc> = 1>
+JsonView Parse(std::string_view buffer, Alloc&& out, unsigned depthLimit = 30) noexcept;
 
 namespace detail {
 
@@ -58,13 +55,13 @@ T fromBig(const char* data) noexcept
 template<int flags, typename Writer>
 static auto writeType(uint8_t what, Writer& out) {
     auto conv = char(what);
-    return out(&conv, 1);
+    return out(std::string_view{&conv, 1});
 }
 
 template<int flags, typename T, typename Writer>
 static auto write(T what, Writer& out){
     T temp = toBig<flags>(what);
-    return out((const char*)&temp.data(), temp.size());
+    return out(std::string_view{(const char*)&temp, sizeof(temp)});
 };
 
 template<int flags, typename Writer>
@@ -82,7 +79,7 @@ auto writeString(std::string_view sv, Writer& out)
         if (auto err = writeType<flags>(0xdb, out)) [[unlikely]] return err;
         if (auto err = write<flags>(uint32_t(sv.size()), out)) [[unlikely]] return err;
     }
-    return out(sv.data(), sv.size());
+    return out(sv);
 }
 
 template<int flags, typename Writer>
@@ -98,11 +95,11 @@ auto writeBin(std::string_view sv, Writer& out)
         if (auto err = writeType<flags>(0xc6, out)) [[unlikely]] return err;
         if (auto err = write<flags>(uint32_t(sv.size()), out)) [[unlikely]] return err;
     }
-    return out(sv.data(), sv.size()); 
+    return out(sv);
 }
 
 template<int flags, typename Writer>
-void writeNegInt(int64_t i, Writer& out) {
+auto writeNegInt(int64_t i, Writer& out) {
     if (i >= -32) {
         return writeType<flags>(int8_t(i), out);
     } else if (i >= std::numeric_limits<int8_t>::min()) {
@@ -121,7 +118,7 @@ void writeNegInt(int64_t i, Writer& out) {
 }
 
 template<int flags, typename Writer>
-void writePosInt(uint64_t i, Writer& out) {
+auto writePosInt(uint64_t i, Writer& out) {
     if (i < 128) {
         return writeType<flags>(uint8_t(i), out);
     } else if (i <= std::numeric_limits<uint8_t>::max()) {
@@ -142,7 +139,7 @@ void writePosInt(uint64_t i, Writer& out) {
 struct OneParseResult {
     JsonView val;
     size_t advance{};
-    constexpr explicit operator bool() const noexcept {
+    explicit operator bool() const noexcept {
         return val.type() != t_discarded;
     }
 };
@@ -150,6 +147,13 @@ struct OneParseResult {
 inline constexpr auto ErrEOF = OneParseResult{JsonView::Discarded("unexpected eof")};
 inline constexpr auto ErrOOM = OneParseResult{JsonView::Discarded("unexpected oom")};
 inline constexpr auto ErrTooDeep = OneParseResult{JsonView::Discarded("recursion is too deep")};
+
+template<int flags, typename Alloc>
+OneParseResult parseOne(std::string_view data, Alloc& ctx, unsigned depthLimit) noexcept;
+template<int flags, typename Alloc>
+OneParseResult parseObject(unsigned count, std::string_view data, Alloc& ctx, unsigned depthLimit) noexcept;
+template<int flags, typename Alloc>
+OneParseResult parseArray(unsigned int count, std::string_view data, Alloc& ctx, unsigned depthLimit) noexcept;
 
 template<int flags, typename T>
 OneParseResult unpackTrivial(std::string_view data) noexcept
@@ -180,34 +184,31 @@ OneParseResult unpackBin(std::string_view data) noexcept
     if ((len.advance + add > data.size())) [[unlikely]] {
         return ErrEOF;
     }
-    return {{
-        BinaryView{data.substr(len.advance + add, act).data(), 
-        unsigned(act)}
-        }, size_t(act+len.advance + add)};
+    return {JsonView::Binary(data.substr(len.advance + add, act)), size_t(act+len.advance + add)};
 }
 
 template<int flags, typename SzT, typename Alloc>
-OneParseResult unpackArr(std::string_view data, Alloc& ctx) noexcept
+OneParseResult unpackArr(std::string_view data, Alloc& ctx, unsigned depthLimit) noexcept
 {
     auto len = unpackTrivial<flags, SzT>(data);
     if ((!len)) [[unlikely]] return len;
     if ((len.advance > data.size())) [[unlikely]] {
         return ErrEOF;
     }
-    auto res = parseArray(unsigned(len.val.GetData().uinteger), data.substr(len.advance), ctx);
+    auto res = parseArray<flags>(unsigned(len.val.GetData().uinteger), data.substr(len.advance), ctx, depthLimit);
     res.advance += sizeof(SzT);
     return res;
 }
 
 template<int flags, typename SzT, typename Alloc>
-OneParseResult unpackObj(std::string_view data, Alloc& ctx) noexcept
+OneParseResult unpackObj(std::string_view data, Alloc& ctx, unsigned depthLimit) noexcept
 {
     auto len = unpackTrivial<flags, SzT>(data);
     if ((!len)) [[unlikely]] return len;
     if ((len.advance > data.size())) [[unlikely]] {
         return ErrEOF;
     }
-    auto res = parseObject<flags>(unsigned(len.val.UInteger), data.substr(len.advance), ctx);
+    auto res = parseObject<flags>(unsigned(len.val.GetData().uinteger), data.substr(len.advance), ctx, depthLimit);
     res.advance += sizeof(SzT);
     return res;
 }
@@ -215,12 +216,50 @@ OneParseResult unpackObj(std::string_view data, Alloc& ctx) noexcept
 template<int flags, size_t size>
 static OneParseResult unpackExt(std::string_view data) noexcept {
     constexpr auto typeTag = 1;
-    if ((data.size() < 1+typeTag+size)) [[unlikely]] return ErrEOF;
-    return {{
-        .Type = t_bin,
-        .Size = typeTag+size,
-        .String = data.data()+1, 
-        }, 1+typeTag+size};
+    if ((data.size() < 1 + typeTag + size)) [[unlikely]] return ErrEOF;
+    return {JsonView::Binary({data.data() + 1, typeTag + size}), 1 + typeTag + size};
+}
+
+template<int flags, typename Alloc>
+OneParseResult parseObject(unsigned count, std::string_view data, Alloc& ctx, unsigned depthLimit) noexcept try
+{
+    auto obj = (JsonPair*)ctx(sizeof(JsonPair) * count);
+    size_t advance = 1;
+    for (size_t i = 0u; i < count; ++i) {
+        auto key = parseOne<flags>(data, ctx, depthLimit);
+        if (!key) [[unlikely]] return key;
+        advance += key.advance;
+        if (key.advance > data.size()) [[unlikely]] return ErrEOF;
+        data = data.substr(key.advance);
+        auto val = parseOne<flags>(data, ctx, depthLimit);
+        if (!val) [[unlikely]] return val;
+        advance += val.advance;
+        if (val.advance > data.size()) [[unlikely]] return ErrEOF;
+        data = data.substr(val.advance);
+        obj[i].key = key.val;
+        obj[i].value = val.val;
+    }
+    return {JsonView(obj, count), advance};
+} catch(...) {
+    return ErrOOM;
+}
+
+template<int flags, typename Alloc>
+OneParseResult parseArray(unsigned int count, std::string_view data, Alloc& ctx, unsigned depthLimit) noexcept try
+{
+    auto arr = (JsonView*)ctx(sizeof(JsonView) * count);
+    size_t advance = 1;
+    for (size_t i = 0u; i < count; ++i) {
+        auto curr = parseOne<flags>(data, ctx, depthLimit);
+        if (!curr) [[unlikely]] return curr;
+        advance += curr.advance;
+        if (curr.advance > data.size()) [[unlikely]] return ErrEOF;
+        data = data.substr(curr.advance);
+        arr[i] = curr.val;
+    }
+    return {JsonView(arr, count), advance};
+} catch (...) {
+    return ErrOOM;
 }
 
 template<int flags, typename Alloc>
@@ -236,7 +275,7 @@ OneParseResult parseOne(std::string_view data, Alloc& ctx, unsigned depthLimit) 
     }
     auto head = uint8_t(data.front());
     switch (head) {
-    case 0xc0: return {JsonView{.Type = t_null,}, 1};
+    case 0xc0: return {JsonView{nullptr}, 1};
     case 0xc2: return {JsonView{false}, 1};
     case 0xc3: return {JsonView{true}, 1};
     case 0xcc: return unpackTrivial<flags, uint8_t>(data);
@@ -255,10 +294,10 @@ OneParseResult parseOne(std::string_view data, Alloc& ctx, unsigned depthLimit) 
     case 0xc4: return unpackBin<flags, uint8_t>(data);
     case 0xc5: return unpackBin<flags, uint16_t>(data);
     case 0xc6: return unpackBin<flags, uint32_t>(data);
-    case 0xdc: return unpackArr<flags, uint16_t>(data, ctx);
-    case 0xdd: return unpackArr<flags, uint32_t>(data, ctx);
-    case 0xde: return unpackObj<flags, uint16_t>(data, ctx);
-    case 0xdf: return unpackObj<flags, uint32_t>(data, ctx);
+    case 0xdc: return unpackArr<flags, uint16_t>(data, ctx, depthLimit - 1);
+    case 0xdd: return unpackArr<flags, uint32_t>(data, ctx, depthLimit - 1);
+    case 0xde: return unpackObj<flags, uint16_t>(data, ctx, depthLimit - 1);
+    case 0xdf: return unpackObj<flags, uint32_t>(data, ctx, depthLimit - 1);
     case 0xd4: return unpackExt<flags, 1>(data);
     case 0xd5: return unpackExt<flags, 2>(data);
     case 0xd6: return unpackExt<flags, 4>(data);
@@ -280,17 +319,17 @@ OneParseResult parseOne(std::string_view data, Alloc& ctx, unsigned depthLimit) 
     case 111: case 112: case 113: case 114: case 115: case 116: case 117: case 118: case 119: case 120:
     case 121: case 122: case 123: case 124: case 125: case 126:
     case 127: { //pos fixint
-        return {head, 1};
+        return {JsonView{head}, 1};
     }
     case 0x80: case 0x81: case 0x82: case 0x83: case 0x84: case 0x85: case 0x86: case 0x87: case 0x88:
     case 0x89: case 0x8a: case 0x8b: case 0x8c: case 0x8d: case 0x8e:
     case 0x8f: { //fixmap
-        return parseObject<flags>(head & 0b1111, data.substr(1), ctx);
+        return parseObject<flags>(head & 0b1111, data.substr(1), ctx, depthLimit - 1);
     }
     case 0x90: case 0x91: case 0x92: case 0x93: case 0x94: case 0x95: case 0x96: case 0x97:
     case 0x98: case 0x99: case 0x9a: case 0x9b: case 0x9c: case 0x9d: case 0x9e:
     case 0x9f: { //fixarr
-        return parseArray<flags>(head & 0b1111, data.substr(1), ctx);
+        return parseArray<flags>(head & 0b1111, data.substr(1), ctx, depthLimit - 1);
     }
     case 0xa0: case 0xa1: case 0xa2: case 0xa3: case 0xa4: case 0xa5: case 0xa6: case 0xa7:
     case 0xa8: case 0xa9: case 0xaa: case 0xab: case 0xac: case 0xad: case 0xae: case 0xaf:
@@ -308,7 +347,7 @@ OneParseResult parseOne(std::string_view data, Alloc& ctx, unsigned depthLimit) 
     case 0xf0: case 0xf1: case 0xf2: case 0xf3: case 0xf4: case 0xf5: case 0xf6: case 0xf7: case 0xf8:
     case 0xf9: case 0xfa: case 0xfb: case 0xfc: case 0xfd: case 0xfe:
     case 0xff: { //neg fixint
-        return {static_cast<int8_t>(head), 1};
+        return {JsonView{static_cast<int8_t>(head)}, 1};
     }
     default: {
         return {JsonView::Discarded("unknown type")};
@@ -316,113 +355,60 @@ OneParseResult parseOne(std::string_view data, Alloc& ctx, unsigned depthLimit) 
     }
 }
 
-template<int flags, typename Alloc>
-OneParseResult parseObject(unsigned count, std::string_view data, Alloc& ctx, unsigned depthLimit) noexcept try
-{
-    auto obj = ctx.MakeObjectOf(count);
-    size_t advance = 1;
-    for (size_t i = 0u; i <flags,  count; ++i) {
-        auto key = parseOne(data, ctx);
-        if (meta_Unlikely(!key))
-            return key;
-        if (meta_Unlikely(!key.val.IsString()))
-            return {JsonView::Discarded("keys must be string")};
-        advance += key.advance;
-        if (meta_Unlikely(key.advance > data.size())) {
-            return ErrEOF;
-        }
-        data = data.substr(key.advance);
-        auto val = parseOne(data, ctx);
-        if (meta_Unlikely(!val))
-            return val;
-        advance += val.advance;
-        if (meta_Unlikely(val.advance > data.size())) {
-            return ErrEOF;
-        }
-        data = data.substr(val.advance);
-        obj[i].key = {key.val.GetData().string, key.val.GetData().size};
-        obj[i].value = val.val;
-    }
-    return {JsonView::Object(obj, count), advance};
-} catch(...) {
-    return ErrOOM;
-}
-
-template<int flags, typename Alloc>
-OneParseResult parseArray(unsigned int count, std::string_view data, Alloc& ctx, unsigned depthLimit) noexcept try
-{
-    auto arr = (JsonView*)ctx(sizeof(JsonView) * count);
-    size_t advance = 1;
-    for (size_t i = 0u; i < count; ++i) {
-        auto curr = parseOne(data, ctx);
-        if (meta_Unlikely(!curr))
-            return curr;
-        advance += curr.advance;
-        if (meta_Unlikely(curr.advance > data.size())) {
-            return ErrEOF;
-        }
-        data = data.substr(curr.advance);
-        arr[i] = curr.val;
-    }
-    return {JsonView::Array(arr, count), advance};
-} catch (...) {
-    return ErrOOM;
-}
-
-} //<flags, anon>
+} //<anon>
 
 template<int flags, typename Writer, if_writer_t<Writer>>
-auto Dump(JsonView j, Writer&& out, unsigned depthLimit) {
+auto Dump(JsonView j, Writer&& out, unsigned depthLimit) noexcept {
     if (depthLimit == 0) [[unlikely]] {
-        return out(nullptr, 0);
+        return out(std::string_view{});
     }
     using namespace detail;
-    switch (j.Type)
+    switch (j.type())
     {
     case t_null: {
         return writeType<flags>(uint8_t(0xc0), out);
     }
     case t_bool: {
-        return writeType<flags>(j.Boolean ? uint8_t(0xc3) : uint8_t(0xc2), out);
+        return writeType<flags>(j.GetData().boolean ? uint8_t(0xc3) : uint8_t(0xc2), out);
     }
     case t_int: {
-        if (j.Integer < 0) {
-            return writeNegInt<flags>(j.Integer, out);
+        if (j.GetData().integer < 0) {
+            return writeNegInt<flags>(j.GetData().integer, out);
         } else {
-            return writePosInt<flags>(j.Integer, out);
+            return writePosInt<flags>(j.GetData().integer, out);
         }
     }
     case t_uint: {
-        return writePosInt<flags>(j.Integer, out);
+        return writePosInt<flags>(j.GetData().integer, out);
     }
     case t_num: {
         if (auto err = writeType<flags>(uint8_t(0xcb), out)) [[unlikely]] return err;
-        return write<flags>(json.GetData().number, out);
+        return write<flags>(j.GetData().number, out);
     }
     case t_string: {
         return writeString<flags>(j.Str(), out);
     }
-    case t_bin: {
+    case t_binary: {
         return writeBin<flags>(j.Str(), out);
     }
     case t_array: {
-        auto sz = j.Size;
-        if (sz <flags, = 0b1111) {
+        auto sz = j.GetData().size;
+        if (sz <= 0b1111) {
             if (auto err = writeType<flags>(uint8_t(0b10010000 | sz), out)) [[unlikely]] return err;
-        } else if (sz <flags, = numeric_limits<flags, uint16_t>::max()) {
+        } else if (sz <= std::numeric_limits<uint16_t>::max()) {
             if (auto err = writeType<flags>(0xdc, out)) [[unlikely]] return err;
             if (auto err = write<flags>(uint16_t(sz), out)) [[unlikely]] return err;
         } else {
             if (auto err = writeType<flags>(0xdd, out)) [[unlikely]] return err;
             if (auto err = write<flags>(uint32_t(sz), out)) [[unlikely]] return err;
         }
-        for (auto v: j.Arr()) {
+        for (auto v: j.Array()) {
             if (auto err = Dump<flags>(v, out, depthLimit - 1)) [[unlikely]] return err;
         }
-        return out(nullptr, 0);
+        return out(std::string_view{});
     }
     case t_object: {
-        auto sz = j.Size;
+        auto sz = j.GetData().size;
         if (sz <= 0b1111)  {
             if (auto err = writeType<flags>(uint8_t(0b10000000 | sz), out)) [[unlikely]] return err;
         } else if (sz <= std::numeric_limits<uint16_t>::max()) {
@@ -432,24 +418,30 @@ auto Dump(JsonView j, Writer&& out, unsigned depthLimit) {
             if (auto err = writeType<flags>(0xdf, out)) [[unlikely]] return err;
             if (auto err = write<flags>(uint32_t(sz), out)) [[unlikely]] return err;
         }
-        for (auto [k, v]: j.Obj()) {
+        for (auto [k, v]: j.Object()) {
             if (auto err = Dump<flags>(k, out, depthLimit - 1)) [[unlikely]] return err;
             if (auto err = Dump<flags>(v, out, depthLimit - 1)) [[unlikely]] return err;
         }
-        return out(nullptr, 0);
+        return out(std::string_view{});
     }
     [[unlikely]] case t_discarded: {
-        return out(nullptr, 0);
+        return out(std::string_view{});
     }
     [[unlikely]] default: {
         assert(false && "Invalid json type");
+        std::abort();
     }
     }
 }
 
 template<int flags, typename Alloc, if_alloc_t<Alloc>>
-JsonView Parse(std::string_view buffer, Alloc&& out, unsigned depthLimit) {
-
+JsonView Parse(std::string_view buffer, Alloc&& alloc, unsigned depthLimit) noexcept {
+    detail::OneParseResult res = detail::parseOne<flags>(buffer, alloc, depthLimit);
+    if (res.advance != buffer.size()) {
+        return JsonView::Discarded("msgpack was not fully consumed");
+    } else {
+        return res.val;
+    }
 }
 
 }
