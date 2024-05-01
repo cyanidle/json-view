@@ -8,7 +8,7 @@
 #include <string_view>
 #include <concepts>
 
-namespace jv
+namespace mjv
 {
 
 struct JsonPair;
@@ -53,17 +53,17 @@ struct JsonView
             .boolean = b
         } {}
     explicit constexpr JsonView(std::signed_integral auto v) noexcept : data {
-            .type = t_bool,
+            .type = t_int,
             .size = 0,
             .integer = v
         } {}
     explicit constexpr JsonView(std::unsigned_integral auto v) noexcept : data {
-            .type = t_bool,
+            .type = t_uint,
             .size = 0,
             .uinteger = v
         } {}
     explicit constexpr JsonView(std::floating_point auto v) noexcept : data {
-            .type = t_bool,
+            .type = t_num,
             .size = 0,
             .number = v,
         } {}
