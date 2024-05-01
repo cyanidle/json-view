@@ -1,4 +1,6 @@
 build/
+*.user
+.vscode
 # Prerequisites
 *.d
 
