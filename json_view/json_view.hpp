@@ -7,6 +7,7 @@
 #include "assert.h"
 #include <string_view>
 #include <concepts>
+#include <forward_list>
 
 namespace mjv
 {
@@ -43,26 +44,29 @@ struct JsonView
             intmax_t integer = 0;
         };
     };
+    constexpr bool Valid() const noexcept {
+        return data.type != t_discarded;
+    }
     constexpr JsonView(Data d) noexcept : data(d) {}
-    explicit constexpr JsonView(std::nullptr_t = {}) noexcept : data {
+    constexpr JsonView(std::nullptr_t = {}) noexcept : data {
             .type = t_null,
         } {}
-    explicit constexpr JsonView(bool b) noexcept : data {
+    constexpr JsonView(bool b) noexcept : data {
             .type = t_bool,
             .size = 0,
             .boolean = b
         } {}
-    explicit constexpr JsonView(std::signed_integral auto v) noexcept : data {
+    constexpr JsonView(std::signed_integral auto v) noexcept : data {
             .type = t_int,
             .size = 0,
             .integer = v
         } {}
-    explicit constexpr JsonView(std::unsigned_integral auto v) noexcept : data {
+    constexpr JsonView(std::unsigned_integral auto v) noexcept : data {
             .type = t_uint,
             .size = 0,
             .uinteger = v
         } {}
-    explicit constexpr JsonView(std::floating_point auto v) noexcept : data {
+    constexpr JsonView(std::floating_point auto v) noexcept : data {
             .type = t_num,
             .size = 0,
             .number = v,
@@ -72,20 +76,21 @@ struct JsonView
             .size = unsigned(sv.size()),
             .string = sv.data()
         } {}
-    explicit constexpr JsonView(const JsonPair* obj, unsigned count) noexcept : data {
-            .type = t_array,
+    JsonView(const char* s) noexcept : JsonView(std::string_view{s}) {}
+    constexpr JsonView(const JsonPair* obj, unsigned count) noexcept : data {
+            .type = t_object,
             .size = count,
             .object = obj
         } {}
-    explicit constexpr JsonView(const JsonView* arr, unsigned count) noexcept : data{
+    constexpr JsonView(const JsonView* arr, unsigned count) noexcept : data{
             .type = t_array,
             .size = count,
             .array = arr
         } {}
     template<size_t N>
-    explicit constexpr JsonView(const JsonPair(&obj)[N]) noexcept : JsonView(obj, N) {}
+    constexpr JsonView(const JsonPair(&obj)[N]) noexcept : JsonView(obj, N) {}
     template<size_t N>
-    explicit constexpr JsonView(const JsonView(&arr)[N]) noexcept : JsonView(arr, N) {}
+    constexpr JsonView(const JsonView(&arr)[N]) noexcept : JsonView(arr, N) {}
     static constexpr JsonView Discarded(std::string_view reason = {}) noexcept {
         return Data {
             .type = t_discarded,
@@ -100,11 +105,13 @@ struct JsonView
             .string = data.data()
         };
     }
+    JsonView operator[](unsigned idx) const noexcept;
+    JsonView operator[](std::string_view key) const noexcept;
     Data const& GetData() const noexcept {return data;}
     AsObject Object() const noexcept;
     AsArray Array() const noexcept;
     constexpr Types type() const noexcept {return data.type;}
-    std::string_view Str() const noexcept {
+    std::string_view String() const noexcept {
         assert(data.type == t_string);
         return {data.string, data.size};
     }
@@ -149,11 +156,53 @@ AsArray JsonView::Array() const noexcept {
     return {*this};
 }
 
+inline JsonView JsonView::operator[](unsigned int idx) const noexcept {
+    assert(data.type == t_array);
+    if (idx >= data.size) {
+        return JsonView::Discarded("no such index");
+    }
+    return data.array[idx];
+}
+
+inline JsonView JsonView::operator[](std::string_view key) const noexcept {
+    assert(data.type == t_object);
+    for (auto& [k, v]: Object()) {
+        if (k.data.type == t_string) [[likely]] {
+            if (k.String() == key) {
+                return v;
+            }
+        }
+    }
+    return JsonView::Discarded("no such key");
+}
+
 AsObject JsonView::Object() const noexcept {
     return {*this};
 }
 
-}
+template<typename Alloc = std::allocator<char>>
+struct Context {
+    Context(Alloc&& _a = {}) :
+        a(std::move(_a)),
+        allocs(a)
+    {}
+    [[nodiscard, gnu::always_inline]] void* operator()(size_t sz) {
+        return allocs.emplace_front(a.allocate(sz), sz).first;
+    }
+    ~Context() {
+        for (auto p: allocs) {
+            a.deallocate(p.first, p.second);
+        }
+    }
+protected:
+    Alloc a;
+    using entry = std::pair<char*, size_t>;
+
+    using list_alloc = typename std::allocator_traits<Alloc>::template rebind_alloc<entry>;
+    std::forward_list<entry, list_alloc> allocs;
+};
+
+} //mjv
 
 
 #endif //JSON_VIEW_HPP

@@ -1,16 +1,22 @@
 #include "json_view/json_view.hpp"
 #include "json_view/msgpack.hpp"
+#include <string>
 
 int main(int argc, char *argv[])
 {
     using namespace mjv;
     using namespace mjv::msgpack;
-    JsonView obj[3] = {JsonView{1}, JsonView{2}, JsonView{nullptr}};
+    JsonPair obj[] = {{"a", 123}, {"b", "babra"}};
+    JsonView arr[] = {nullptr, "123"};
+    JsonView top[] = {1231231231, 111112, nullptr, arr, obj};
+    Context ctx;
     std::string serial;
-    Dump<NativeEndian>(JsonView(obj), [&](auto sv) -> CannotFail {
+    Dump(JsonView(top), [&](auto sv) -> CannotFail {
         serial += sv;
         return {};
     });
-    auto back = Parse<NativeEndian>(serial, malloc);
+    auto back = Parse(serial, ctx);
+    auto str = back[3][1];
+    assert(str.String() == "123");
     return 0;
 }

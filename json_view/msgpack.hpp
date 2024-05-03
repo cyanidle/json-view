@@ -5,6 +5,9 @@
 #include "json_view.hpp"
 #include <type_traits>
 #include <limits>
+#include <string.h>
+#include <stdlib.h>
+#include <endian.h>
 
 namespace mjv::msgpack
 {
@@ -30,25 +33,44 @@ JsonView Parse(std::string_view buffer, Alloc&& out, unsigned depthLimit = 30) n
 
 namespace detail {
 
-template<int flags, typename T>
-T toBig(T raw) noexcept
+template<typename T> concept bswappable = std::integral<T> || std::floating_point<T>;
+
+__attribute__((always_inline))
+static inline auto bswap(bswappable auto val) noexcept
+    requires (sizeof(val) <= 8)
 {
-    if constexpr (flags & NativeEndian) {
-        return raw;
+    if constexpr (sizeof(val) == 1) {
+        return val;
+    } else if constexpr (sizeof(val) == 2) {
+        return __builtin_bswap16(val);
+    } else if constexpr (sizeof(val) == 4) {
+        return __builtin_bswap32(val);
     } else {
-        // TODO
+        return __builtin_bswap64(val);
     }
 }
 
-template<int flags, typename T>
-T fromBig(const char* data) noexcept
+template<int flags>
+__attribute__((always_inline))
+static inline auto toBig(bswappable auto raw) noexcept
 {
-    if constexpr (flags & NativeEndian) {
-        T res;
-        memcpy(&res, data, sizeof(res));
+    if constexpr (flags & NativeEndian || BYTE_ORDER == BIG_ENDIAN) {
+        return raw;
+    } else  {
+        return bswap(raw);
+    }
+}
+
+template<int flags, bswappable T>
+__attribute__((always_inline))
+static inline T fromBig(const char* data) noexcept
+{
+    T res;
+    memcpy(&res, data, sizeof(res));
+    if constexpr (flags & NativeEndian || BYTE_ORDER == BIG_ENDIAN) {
         return res;
-    } else {
-        // TODO
+    } else  {
+        return bswap(res);
     }
 }
 
@@ -215,10 +237,8 @@ JsonView parseObject(unsigned count, std::string_view& data, Alloc& ctx, unsigne
     auto obj = (JsonPair*)ctx(sizeof(JsonPair) * count);
     if (!obj) [[unlikely]] return ErrOOM;
     for (size_t i = 0u; i < count; ++i) {
-        obj[i].key = parseOne<flags>(data, ctx, depthLimit);
-        _JV_CHECK(obj[i].key);
-        obj[i].value = parseOne<flags>(data, ctx, depthLimit);
-        _JV_CHECK(obj[i].value);
+        _JV_CHECK(obj[i].key = parseOne<flags>(data, ctx, depthLimit));
+        _JV_CHECK(obj[i].value = parseOne<flags>(data, ctx, depthLimit));
     }
     return JsonView(obj, count);
 } catch(...) {
@@ -231,8 +251,7 @@ JsonView parseArray(unsigned int count, std::string_view& data, Alloc& ctx, unsi
     auto arr = (JsonView*)ctx(sizeof(JsonView) * count);
     if (!arr) [[unlikely]] return ErrOOM;
     for (size_t i = 0u; i < count; ++i) {
-        arr[i] = parseOne<flags>(data, ctx, depthLimit);
-        _JV_CHECK(arr[i]);
+        _JV_CHECK(arr[i] = parseOne<flags>(data, ctx, depthLimit));
     }
     return JsonView(arr, count);
 } catch (...) {
@@ -240,6 +259,7 @@ JsonView parseArray(unsigned int count, std::string_view& data, Alloc& ctx, unsi
 }
 
 template<int flags, typename Alloc>
+__attribute__((flatten))
 JsonView parseOne(std::string_view& data, Alloc& ctx, unsigned depthLimit) noexcept
 {
     if (!depthLimit) [[unlikely]] {
@@ -315,7 +335,7 @@ JsonView parseOne(std::string_view& data, Alloc& ctx, unsigned depthLimit) noexc
     case 0xb8: case 0xb9: case 0xba: case 0xbb: case 0xbc: case 0xbd: case 0xbe:
     case 0xbf: { //fixstr
         size_t len = head & 0b11111;
-        if ((len >= data.size())) [[unlikely]] {
+        if ((len > data.size())) [[unlikely]] {
             return ErrEOF;
         }
         return JsonView(consume(data, len));
@@ -336,6 +356,7 @@ JsonView parseOne(std::string_view& data, Alloc& ctx, unsigned depthLimit) noexc
 } //<anon>
 
 template<int flags, typename Writer, if_writer_t<Writer>>
+__attribute__((flatten))
 auto Dump(JsonView j, Writer&& out, unsigned depthLimit) noexcept {
     if (depthLimit == 0) [[unlikely]] {
         return out(std::string_view{});
@@ -364,10 +385,10 @@ auto Dump(JsonView j, Writer&& out, unsigned depthLimit) noexcept {
         return write<flags>(j.GetData().number, out);
     }
     case t_string: {
-        return writeString<flags>(j.Str(), out);
+        return writeString<flags>(j.String(), out);
     }
     case t_binary: {
-        return writeBin<flags>(j.Str(), out);
+        return writeBin<flags>(j.String(), out);
     }
     case t_array: {
         auto sz = j.GetData().size;
@@ -413,9 +434,10 @@ auto Dump(JsonView j, Writer&& out, unsigned depthLimit) noexcept {
 }
 
 template<int flags, typename Alloc, if_alloc_t<Alloc>>
+__attribute__((flatten))
 JsonView Parse(std::string_view buffer, Alloc&& alloc, unsigned depthLimit) noexcept {
     JsonView res = detail::parseOne<flags>(buffer, alloc, depthLimit);
-    if (buffer.size()) {
+    if (res.Valid() && buffer.size()) {
         return JsonView::Discarded("msgpack was not fully consumed");
     } else {
         return res;
