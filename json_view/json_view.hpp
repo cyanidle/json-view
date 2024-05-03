@@ -50,6 +50,8 @@ struct JsonView
     constexpr JsonView(Data d) noexcept : data(d) {}
     constexpr JsonView(std::nullptr_t = {}) noexcept : data {
             .type = t_null,
+            .size = 0,
+            .integer = 0
         } {}
     constexpr JsonView(bool b) noexcept : data {
             .type = t_bool,
