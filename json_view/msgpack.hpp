@@ -13,10 +13,16 @@ namespace mjv::msgpack
 {
 
 template<typename Fn>
-using if_writer_t = std::enable_if_t<std::is_invocable_v<Fn, std::string_view>, int>;
+concept writer = requires(Fn f, std::string_view msg)
+{
+    {f(msg)} -> std::convertible_to<bool>;
+};
 
 template<typename Fn>
-using if_alloc_t = std::enable_if_t<std::is_invocable_r_v<void*, Fn, size_t>, int>;
+concept alloc = requires(Fn f, size_t sz)
+{
+    {f(sz)} -> std::convertible_to<void*>;
+};
 
 enum Flags {
     Default = 0,
@@ -25,17 +31,17 @@ enum Flags {
 
 using CannotFail = std::false_type;
 
-template<int flags = Default, typename Writer, if_writer_t<Writer> = 1>
+template<int flags = Default, writer Writer>
 auto Dump(JsonView j, Writer&& out, unsigned depthLimit = 30) noexcept;
 
-template<int flags = Default, typename Alloc, if_alloc_t<Alloc> = 1>
+template<int flags = Default, alloc Alloc>
 JsonView Parse(std::string_view buffer, Alloc&& out, unsigned depthLimit = 30) noexcept;
 
 namespace detail {
 
 template<typename T> concept bswappable = std::integral<T> || std::floating_point<T>;
 
-__attribute__((always_inline))
+[[gnu::always_inline]]
 static inline auto bswap(bswappable auto val) noexcept
     requires (sizeof(val) <= 8)
 {
@@ -51,7 +57,7 @@ static inline auto bswap(bswappable auto val) noexcept
 }
 
 template<int flags>
-__attribute__((always_inline))
+[[gnu::always_inline]]
 static inline auto toBig(bswappable auto raw) noexcept
 {
     if constexpr (flags & NativeEndian || BYTE_ORDER == BIG_ENDIAN) {
@@ -62,7 +68,7 @@ static inline auto toBig(bswappable auto raw) noexcept
 }
 
 template<int flags, bswappable T>
-__attribute__((always_inline))
+[[gnu::always_inline]]
 static inline T fromBig(const char* data) noexcept
 {
     T res;
@@ -75,13 +81,15 @@ static inline T fromBig(const char* data) noexcept
 }
 
 template<int flags, typename Writer>
-static auto writeType(uint8_t what, Writer& out) {
+[[gnu::always_inline]]
+inline auto writeType(uint8_t what, Writer& out) {
     auto conv = char(what);
     return out(std::string_view{&conv, 1});
 }
 
 template<int flags, typename T, typename Writer>
-static auto write(T what, Writer& out){
+[[gnu::always_inline]]
+inline auto write(T what, Writer& out){
     T temp = toBig<flags>(what);
     return out(std::string_view{(const char*)&temp, sizeof(temp)});
 };
@@ -178,7 +186,8 @@ template<int flags, typename Alloc>
 JsonView parseArray(unsigned int count, std::string_view& data, Alloc& ctx, unsigned depthLimit) noexcept;
 
 template<int flags, typename T>
-JsonView unpackTrivial(std::string_view& data) noexcept
+[[gnu::always_inline]]
+inline JsonView unpackTrivial(std::string_view& data) noexcept
 {
     if (data.size() < sizeof(T)) [[unlikely]] {
         return ErrEOF;
@@ -190,7 +199,8 @@ JsonView unpackTrivial(std::string_view& data) noexcept
 }
 
 template<int flags, typename SzT>
-JsonView unpackStr(std::string_view& data) noexcept
+[[gnu::always_inline]]
+inline JsonView unpackStr(std::string_view& data) noexcept
 {
     auto len = unpackTrivial<flags, SzT>(data);
     _JV_CHECK(len);
@@ -200,7 +210,8 @@ JsonView unpackStr(std::string_view& data) noexcept
 }
 
 template<int flags, typename SzT, SzT add = 0>
-JsonView unpackBin(std::string_view& data) noexcept
+[[gnu::always_inline]]
+inline JsonView unpackBin(std::string_view& data) noexcept
 {
     auto len = unpackTrivial<flags, SzT>(data);
     _JV_CHECK(len);
@@ -226,13 +237,15 @@ JsonView unpackObj(std::string_view& data, Alloc& ctx, unsigned depthLimit) noex
 }
 
 template<int flags, size_t size>
-static JsonView unpackExt(std::string_view& data) noexcept {
+[[gnu::always_inline]]
+inline JsonView unpackExt(std::string_view& data) noexcept {
     if (data.size() < 1 + size) [[unlikely]] return ErrEOF;
     return JsonView::Binary(consume(data, 1 + size));
 }
 
 template<int flags, typename Alloc>
-JsonView parseObject(unsigned count, std::string_view& data, Alloc& ctx, unsigned depthLimit) noexcept try
+[[gnu::always_inline]]
+inline JsonView parseObject(unsigned count, std::string_view& data, Alloc& ctx, unsigned depthLimit) noexcept try
 {
     auto obj = (JsonPair*)ctx(sizeof(JsonPair) * count);
     if (!obj) [[unlikely]] return ErrOOM;
@@ -246,7 +259,8 @@ JsonView parseObject(unsigned count, std::string_view& data, Alloc& ctx, unsigne
 }
 
 template<int flags, typename Alloc>
-JsonView parseArray(unsigned int count, std::string_view& data, Alloc& ctx, unsigned depthLimit) noexcept try
+[[gnu::always_inline]]
+inline JsonView parseArray(unsigned int count, std::string_view& data, Alloc& ctx, unsigned depthLimit) noexcept try
 {
     auto arr = (JsonView*)ctx(sizeof(JsonView) * count);
     if (!arr) [[unlikely]] return ErrOOM;
@@ -259,7 +273,7 @@ JsonView parseArray(unsigned int count, std::string_view& data, Alloc& ctx, unsi
 }
 
 template<int flags, typename Alloc>
-__attribute__((flatten))
+[[gnu::flatten]]
 JsonView parseOne(std::string_view& data, Alloc& ctx, unsigned depthLimit) noexcept
 {
     if (!depthLimit) [[unlikely]] {
@@ -355,8 +369,8 @@ JsonView parseOne(std::string_view& data, Alloc& ctx, unsigned depthLimit) noexc
 
 } //<anon>
 
-template<int flags, typename Writer, if_writer_t<Writer>>
-__attribute__((flatten))
+template<int flags, writer Writer>
+[[gnu::flatten]]
 auto Dump(JsonView j, Writer&& out, unsigned depthLimit) noexcept {
     if (depthLimit == 0) [[unlikely]] {
         return out(std::string_view{});
@@ -433,8 +447,8 @@ auto Dump(JsonView j, Writer&& out, unsigned depthLimit) noexcept {
     }
 }
 
-template<int flags, typename Alloc, if_alloc_t<Alloc>>
-__attribute__((flatten))
+template<int flags, alloc Alloc>
+[[gnu::flatten]]
 JsonView Parse(std::string_view buffer, Alloc&& alloc, unsigned depthLimit) noexcept {
     JsonView res = detail::parseOne<flags>(buffer, alloc, depthLimit);
     if (res.Valid() && buffer.size()) {
