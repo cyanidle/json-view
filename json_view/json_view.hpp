@@ -73,12 +73,12 @@ struct JsonView
             .size = 0,
             .number = v,
         } {}
-    JsonView(std::string_view sv) noexcept : data {
+    constexpr JsonView(std::string_view sv) noexcept : data {
             .type = t_string,
             .size = unsigned(sv.size()),
             .string = sv.data()
         } {}
-    JsonView(const char* s) noexcept : JsonView(std::string_view{s}) {}
+    constexpr JsonView(const char* s) noexcept : JsonView(std::string_view{s}) {}
     constexpr JsonView(const JsonPair* obj, unsigned count) noexcept : data {
             .type = t_object,
             .size = count,
@@ -107,13 +107,13 @@ struct JsonView
             .string = data.data()
         };
     }
-    JsonView operator[](unsigned idx) const noexcept;
-    JsonView operator[](std::string_view key) const noexcept;
-    Data const& GetData() const noexcept {return data;}
-    AsObject Object() const noexcept;
-    AsArray Array() const noexcept;
+    constexpr JsonView operator[](unsigned idx) const noexcept;
+    constexpr JsonView operator[](std::string_view key) const noexcept;
+    constexpr Data const& GetData() const noexcept {return data;}
+    constexpr AsObject Object() const noexcept;
+    constexpr AsArray Array() const noexcept;
     constexpr Types type() const noexcept {return data.type;}
-    std::string_view String() const noexcept {
+    constexpr std::string_view String() const noexcept {
         assert(data.type == t_string);
         return {data.string, data.size};
     }
@@ -127,13 +127,13 @@ struct JsonPair {
 };
 
 struct AsArray {
-    AsArray(JsonView targ) noexcept : target(targ) {
+    constexpr AsArray(JsonView targ) noexcept : target(targ) {
         assert(targ.type() == t_array);
     }
-    const JsonView* begin() const noexcept {
+    constexpr const JsonView* begin() const noexcept {
         return target.GetData().array;
     }
-    const JsonView* end() const noexcept {
+    constexpr const JsonView* end() const noexcept {
         return target.GetData().array + target.GetData().size;
     }
 protected:
@@ -141,24 +141,24 @@ protected:
 };
 
 struct AsObject {
-    AsObject(JsonView targ) noexcept : target(targ) {
+    constexpr AsObject(JsonView targ) noexcept : target(targ) {
         assert(targ.type() == t_object);
     }
-    const JsonPair* begin() const noexcept {
+    constexpr const JsonPair* begin() const noexcept {
         return target.GetData().object;
     }
-    const JsonPair* end() const noexcept {
+    constexpr const JsonPair* end() const noexcept {
         return target.GetData().object + target.GetData().size;
     }
 protected:
     JsonView target;
 };
 
-AsArray JsonView::Array() const noexcept {
+constexpr AsArray JsonView::Array() const noexcept {
     return {*this};
 }
 
-inline JsonView JsonView::operator[](unsigned int idx) const noexcept {
+inline constexpr JsonView JsonView::operator[](unsigned int idx) const noexcept {
     assert(data.type == t_array);
     if (idx >= data.size) {
         return JsonView::Discarded("no such index");
@@ -166,7 +166,7 @@ inline JsonView JsonView::operator[](unsigned int idx) const noexcept {
     return data.array[idx];
 }
 
-inline JsonView JsonView::operator[](std::string_view key) const noexcept {
+inline constexpr JsonView JsonView::operator[](std::string_view key) const noexcept {
     assert(data.type == t_object);
     for (auto& [k, v]: Object()) {
         if (k.data.type == t_string) [[likely]] {
@@ -178,7 +178,7 @@ inline JsonView JsonView::operator[](std::string_view key) const noexcept {
     return JsonView::Discarded("no such key");
 }
 
-AsObject JsonView::Object() const noexcept {
+constexpr AsObject JsonView::Object() const noexcept {
     return {*this};
 }
 
