@@ -370,7 +370,6 @@ constexpr JsonView parseOne(std::string_view& data, Alloc& ctx, unsigned depthLi
 } //<anon>
 
 template<int flags, writer Writer>
-[[gnu::flatten]]
 constexpr auto Dump(JsonView j, Writer&& out, unsigned depthLimit) noexcept {
     if (depthLimit == 0) [[unlikely]] {
         return out(std::string_view{});
@@ -402,7 +401,7 @@ constexpr auto Dump(JsonView j, Writer&& out, unsigned depthLimit) noexcept {
         return writeString<flags>(j.String(), out);
     }
     case t_binary: {
-        return writeBin<flags>(j.String(), out);
+        return writeBin<flags>(j.Bin(), out);
     }
     case t_array: {
         auto sz = j.GetData().size;
@@ -448,7 +447,6 @@ constexpr auto Dump(JsonView j, Writer&& out, unsigned depthLimit) noexcept {
 }
 
 template<int flags, alloc Alloc>
-[[gnu::flatten]]
 constexpr JsonView Parse(std::string_view buffer, Alloc&& alloc, unsigned depthLimit, size_t* consumed = nullptr) noexcept {
     auto was = buffer.size();
     auto res = detail::parseOne<flags>(buffer, alloc, depthLimit);

@@ -117,6 +117,10 @@ struct JsonView
         assert(data.type == t_string);
         return {data.string, data.size};
     }
+    constexpr std::string_view Bin() const noexcept {
+        assert(data.type == t_binary);
+        return {data.string, data.size};
+    }
 protected:
     Data data;
 };
